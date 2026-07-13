@@ -1,0 +1,251 @@
+from bacpypes3.app import Application
+from bacpypes3.argparse import SimpleArgumentParser
+from fastmcp import FastMCP, Context
+from fastmcp.server.lifespan import lifespan
+from fastmcp.prompts import Message
+from fastmcp.resources import ResourceTemplate
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+
+from bacnet_mcp.settings import Settings
+from bacnet_mcp.utils import get_device
+
+
+@lifespan
+async def app_lifespan(server: FastMCP):
+    args = SimpleArgumentParser().parse_args(args=[])
+
+    if hasattr(server, "address") and server.address:
+        args.address = server.address
+
+    app = Application().from_args(args)
+
+    try:
+        server.app = app
+        yield {}
+    finally:
+        app.close()
+
+
+class BACnetMCP(FastMCP):
+    def __init__(self, address: str | None = None, **kwargs):
+        self.address = address
+        self.app: Application | None = None
+        self.settings = Settings()
+
+        auth = None
+        if self.settings.auth.domain and self.settings.auth.url:
+            from fastmcp.server.auth.providers.workos import AuthKitProvider
+
+            auth = AuthKitProvider(
+                authkit_domain=self.settings.auth.domain,
+                base_url=self.settings.auth.url,
+            )
+
+        super().__init__(
+            name="BACnet MCP Server",
+            lifespan=app_lifespan,
+            auth=auth,
+            **kwargs,
+        )
+
+        self.add_template(
+            ResourceTemplate.from_function(
+                fn=self.read_property,
+                uri_template="udp://{host}:{port}/{obj}/{instance}/{prop}",
+            )
+        )
+
+        self.tool(
+            self.read_object_list,
+            annotations={
+                "title": "Read Object List",
+                "readOnlyHint": True,
+                "openWorldHint": True,
+            },
+        )
+
+        self.tool(
+            self.read_property,
+            annotations={
+                "title": "Read Property",
+                "readOnlyHint": True,
+                "openWorldHint": True,
+            },
+        )
+
+        self.tool(
+            self.read_property_multiple,
+            annotations={
+                "title": "Read Property Multiple",
+                "readOnlyHint": True,
+                "openWorldHint": True,
+            },
+        )
+
+        self.tool(
+            self.write_property,
+            annotations={
+                "title": "Write Property",
+                "readOnlyHint": False,
+                "openWorldHint": True,
+            },
+        )
+
+        self.tool(
+            self.who_is,
+            annotations={
+                "title": "Send Who-Is",
+                "readOnlyHint": True,
+                "openWorldHint": True,
+            },
+        )
+
+        self.tool(
+            self.who_has,
+            annotations={
+                "title": "Send Who-Has",
+                "readOnlyHint": True,
+                "openWorldHint": True,
+            },
+        )
+
+        self.prompt(self.bacnet_error, name="bacnet_error", tags={"bacnet", "error"})
+        self.prompt(self.bacnet_help, name="bacnet_help", tags={"bacnet", "help"})
+
+        self.custom_route("/health", methods=["GET"])(self.health_check)
+
+    def _app(self) -> Application:
+        if self.app is None:
+            raise RuntimeError("BACnet application not initialized")
+        return self.app
+
+    async def read_object_list(
+        self,
+        name: str | None = None,
+        host: str | None = None,
+        port: int | None = None,
+        instance: int = 1001,
+    ) -> list[str]:
+        """Reads object list on a remote unit."""
+        try:
+            host, port = get_device(self.settings, name, host, port)
+            res = await self._app().read_property(
+                f"{host}:{port}", f"device,{instance}", "objectList"
+            )
+            return [str(x) for x in list(res)]
+        except Exception as e:
+            raise RuntimeError(
+                f"Could not read device,{instance} objectList from {host}:{port}"
+            ) from e
+
+    async def read_property(
+        self,
+        ctx: Context,
+        name: str | None = None,
+        host: str | None = None,
+        port: int | None = None,
+        obj: str = "analogValue",
+        instance: str = "1",
+        prop: str = "presentValue",
+    ) -> str:
+        """Reads the content of a BACnet object property on a remote unit."""
+        try:
+            host, port = get_device(self.settings, name, host, port)
+            res = await self._app().read_property(
+                f"{host}:{port}", f"{obj},{instance}", f"{prop}"
+            )
+            return str(res)
+        except Exception as e:
+            raise RuntimeError(
+                f"Could not read {obj},{instance} {prop} from {host}:{port}"
+            ) from e
+
+    async def read_property_multiple(
+        self,
+        ctx: Context,
+        name: str | None = None,
+        host: str | None = None,
+        port: int | None = None,
+        props: list[str | list[str]] | None = None,
+    ) -> str:
+        """Reads the content of one or more BACnet object properties on a remote unit."""
+        try:
+            host, port = get_device(self.settings, name, host, port)
+            res = await self._app().read_property_multiple(f"{host}:{port}", props)
+            return str(res)
+        except Exception as e:
+            raise RuntimeError(
+                f"Could not read properties from {host}:{port}: {e}"
+            ) from e
+
+    async def write_property(
+        self,
+        ctx: Context,
+        name: str | None = None,
+        host: str | None = None,
+        port: int | None = None,
+        obj: str = "analogValue,1",
+        prop: str = "presentValue",
+        data: str = "1.0",
+    ) -> str:
+        """Writes a BACnet object property on a remote device."""
+        try:
+            host, port = get_device(self.settings, name, host, port)
+            await self._app().write_property(
+                f"{host}:{port}", f"{obj}", f"{prop}", f"{data}"
+            )
+            return f"Write to {obj} {prop} on {host}:{port} has succedeed"
+        except Exception as e:
+            raise RuntimeError(f"{e}") from e
+
+    async def who_is(
+        self,
+        ctx: Context,
+        low: int,
+        high: int,
+    ) -> list[str]:
+        """Sends a 'who-is' broadcast message."""
+        try:
+            res = await self._app().who_is(low, high)
+            return [str(x.iAmDeviceIdentifier) for x in res]
+        except Exception as e:
+            raise RuntimeError(f"{e}") from e
+
+    async def who_has(
+        self,
+        ctx: Context,
+        low: int,
+        high: int,
+        obj: str,
+    ) -> list[str]:
+        """Sends a 'who-has' broadcast message."""
+        try:
+            res = await self._app().who_has(low, high, obj)
+            return [str(x.deviceIdentifier) for x in res]
+        except Exception as e:
+            raise RuntimeError(f"{e}") from e
+
+    def bacnet_help(self) -> list[Message]:
+        """Provides examples of how to use the BACnet MCP server."""
+        return [
+            Message("Here are examples of how to read and write properties:"),
+            Message("Read the presentValue property of analog-input,1 at 10.0.0.4."),
+            Message("Fetch the units property of analog-input 2."),
+            Message("Write the value 42 to analog-value instance 1."),
+            Message("Set the presentValue of binary-output 3 to True."),
+        ]
+
+    def bacnet_error(self, error: str | None = None) -> list[Message]:
+        """Asks the user how to handle an error."""
+        return (
+            [
+                Message(f"ERROR: {error!r}"),
+                Message("Would you like to retry, change parameters, or abort?"),
+            ]
+            if error
+            else []
+        )
+
+    async def health_check(self, request: Request) -> JSONResponse:
+        return JSONResponse({"status": "ok"})
