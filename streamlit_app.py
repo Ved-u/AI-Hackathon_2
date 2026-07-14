@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import io
 import json
+import re
 import sys
 import threading
 from pathlib import Path
@@ -10,6 +11,12 @@ from mcp_client_for_ollama.client import MCPClient
 from rich.console import Console
 
 DEFAULT_CONFIG = Path("bacnet-server.json")
+
+ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+
+def strip_ansi_codes(text: str) -> str:
+    return ANSI_ESCAPE_RE.sub("", text)
+
 
 def load_default_server_url():
     if DEFAULT_CONFIG.exists():
@@ -90,23 +97,31 @@ class ThreadedMCPClient:
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
         self.loop_ready.set()
-        self.client = MCPClient(model=self.model) if self.model else MCPClient()
-        # Override the internally created console if possible
+        original_stdout = sys.stdout
+        original_stderr = sys.stderr
+        sys.stdout = self.console_file
+        sys.stderr = self.console_file
         try:
-            self.client.console = self.console
-            self.client.server_connector.console = self.console
-            self.client.model_manager.console = self.console
-            self.client.model_config_manager.console = self.console
-            self.client.prompt_manager.console = self.console
-            self.client.resource_manager.console = self.console
-            self.client.resource_handler.console = self.console
-            self.client.streaming_manager.console = self.console
-            self.client.tool_display_manager.console = self.console
-            self.client.hil_manager.console = self.console
-        except Exception:
-            pass
-        self.client_ready.set()
-        self.loop.run_until_complete(self._worker())
+            self.client = MCPClient(model=self.model) if self.model else MCPClient()
+            # Override the internally created console if possible
+            try:
+                self.client.console = self.console
+                self.client.server_connector.console = self.console
+                self.client.model_manager.console = self.console
+                self.client.model_config_manager.console = self.console
+                self.client.prompt_manager.console = self.console
+                self.client.resource_manager.console = self.console
+                self.client.resource_handler.console = self.console
+                self.client.streaming_manager.console = self.console
+                self.client.tool_display_manager.console = self.console
+                self.client.hil_manager.console = self.console
+            except Exception:
+                pass
+            self.client_ready.set()
+            self.loop.run_until_complete(self._worker())
+        finally:
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
 
     def clear_console_buffer(self):
         with self._buffer_lock:
@@ -147,6 +162,7 @@ class ThreadedMCPClient:
     def process_query(self, query: str) -> tuple[str, str]:
         self.clear_console_buffer()
         result = self._run_coroutine(self.client.process_query(query))
+        self.console_file.flush()
         return result, self.get_console_buffer()
 
     def stop(self):
@@ -196,6 +212,8 @@ def main():
     # Chat area
     if "history" not in st.session_state:
         st.session_state.history = []
+    if "logs" not in st.session_state:
+        st.session_state.logs = []
 
     query = st.text_input("Your message", key="chat_input")
     if st.button("Send") and query:
@@ -217,18 +235,18 @@ def main():
                 out_logs = stdout_buf.getvalue()
                 err_logs = stderr_buf.getvalue()
 
-        # If the underlying client prints progress to stdout/stderr, expose it.
-        # This is important for the model's thinking output and yes/no HIL prompts.
-        debug_info = console_logs if console_logs else ""
-        if out_logs:
-            debug_info += "\n\n[STDOUT]\n" + out_logs
-        if err_logs:
-            debug_info += "\n\n[STDERR]\n" + err_logs
-
-        if debug_info:
-            response = (response or "") + debug_info
+        # Capture debug logs separately from the model response.
+        console_logs = strip_ansi_codes(console_logs or "").strip()
+        out_logs = strip_ansi_codes(out_logs or "").strip()
+        err_logs = strip_ansi_codes(err_logs or "").strip()
 
         st.session_state.history.append((query, response))
+        st.session_state.logs.append({
+            "query": query,
+            "console": console_logs,
+            "stdout": out_logs,
+            "stderr": err_logs,
+        })
         # `st.experimental_rerun()` may be unavailable in some Streamlit versions.
         # Clear the input field instead and let Streamlit rerun naturally on next interaction.
         try:
@@ -247,6 +265,27 @@ def main():
     for q, a in reversed(st.session_state.history):
         st.markdown(f"**You:** {q}")
         st.markdown(f"**Assistant:**\n\n{a}")
+
+    # Display logs in a separate panel for debug visibility
+    with st.expander("Model and transport logs", expanded=True):
+        st.markdown(f"**Captured log entries:** {len(st.session_state.logs)}")
+        if st.session_state.logs:
+            for entry in reversed(st.session_state.logs):
+                st.markdown(f"**Query:** {entry['query']}")
+                if entry["console"]:
+                    st.markdown("**Console:**")
+                    st.text(entry["console"])
+                if entry["stdout"]:
+                    st.markdown("**STDOUT:**")
+                    st.text(entry["stdout"])
+                if entry["stderr"]:
+                    st.markdown("**STDERR:**")
+                    st.text(entry["stderr"])
+                if not (entry["console"] or entry["stdout"] or entry["stderr"]):
+                    st.text("No debug logs captured for this query.")
+                st.markdown("---")
+        else:
+            st.write("No debug logs captured yet.")
 
 if __name__ == "__main__":
     main()

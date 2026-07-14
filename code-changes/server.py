@@ -124,7 +124,7 @@ class BACnetMCP(FastMCP):
         self,
         name: str | None = None,
         host: str | None = None,
-        port: int | None = None,
+        port: str | int | None = None,
         instance: int = 1001,
     ) -> list[str]:
         """Reads object list on a remote unit."""
@@ -144,7 +144,7 @@ class BACnetMCP(FastMCP):
         ctx: Context,
         name: str | None = None,
         host: str | None = None,
-        port: int | None = None,
+        port: str | int | None = None,
         obj: str = "analogValue",
         instance: str = "1",
         prop: str = "presentValue",
@@ -166,7 +166,7 @@ class BACnetMCP(FastMCP):
         ctx: Context,
         name: str | None = None,
         host: str | None = None,
-        port: int | None = None,
+        port: str | int | None = None,
         props: list[str | list[str]] | None = None,
     ) -> str:
         """Reads the content of one or more BACnet object properties on a remote unit."""
@@ -184,7 +184,7 @@ class BACnetMCP(FastMCP):
         ctx: Context,
         name: str | None = None,
         host: str | None = None,
-        port: int | None = None,
+        port: str | int | None = None,
         obj: str = "analogValue,1",
         prop: str = "presentValue",
         data: str = "1.0",

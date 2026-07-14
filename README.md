@@ -26,4 +26,7 @@ ollmcp
 
 # Optional: Streamlit UI
 pip install streamlit
-streamlit run streamlit_app.py
+python -m streamlit run streamlit_app.py
+
+# to add device-ip as name 
+fill this json
