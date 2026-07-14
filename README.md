@@ -8,6 +8,8 @@ ollama pull qwen3.5:latest
 python -m pip install --upgrade pip
 pip install bacnet-mcp
 pip install -e mcp-client-for-ollama
+or
+pip install --upgrade ollmcp
 
 # add installed folder to system/user path
 example: C:\Users\ved\AppData\Roaming\Python\Python314\Scripts

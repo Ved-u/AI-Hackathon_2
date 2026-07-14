@@ -179,44 +179,51 @@ def process_query(client: ThreadedMCPClient, query: str) -> tuple[str, str]:
     return client.process_query(query)
 
 def main():
-    st.set_page_config(page_title="ollmcp Chat UI", layout="wide")
-    st.title("ollmcp — Streamlit Chat UI")
+    st.set_page_config(page_title="Test-Automation 2.0", layout="wide")
+    st.title("📑 Test-Automation 2.0")
 
-    # Sidebar: server URL and model selection
     default_url = load_default_server_url()
     default_model = "qwen3.5:latest"
-    with st.sidebar.form("connect"):
-        st.write("Connect to MCP server")
-        server_url = st.text_input("MCP server URL (streamable HTTP or SSE)", value=default_url)
-        model_choice = st.text_input(
-            "Ollama model (e.g. qwen3.5:latest)",
-            value=st.session_state.get("desired_model") or default_model
-        )
-        connect = st.form_submit_button("Connect")
 
-    # Create or update client based on selected model
-    desired_model = model_choice.strip() or None
-    if desired_model:
-        st.session_state.desired_model = desired_model
+    with st.sidebar:
+        st.header("🔌 MCP Server")
+        with st.form("connect"):
+            server_url = st.text_input("MCP server URL (streamable HTTP or SSE)", value=default_url)
+            model_choice = st.text_input(
+                "Ollama model (e.g. qwen3.5:latest)",
+                value=st.session_state.get("desired_model") or default_model,
+            )
+            connect = st.form_submit_button("Connect")
 
-    client = get_client()
+        if connect and server_url:
+            with st.spinner("Connecting to server..."):
+                try:
+                    desired_model = model_choice.strip() or None
+                    if desired_model:
+                        st.session_state.desired_model = desired_model
+                    client = get_client()
+                    connect_to_server(client, server_url)
+                    st.success("Connected — tools and prompts loaded")
+                except Exception as e:
+                    st.error(f"Failed to connect: {e}")
 
-    if connect and server_url:
-        with st.spinner("Connecting to server..."):
-            try:
-                connect_to_server(client, server_url)
-                st.success("Connected — tools and prompts loaded")
-            except Exception as e:
-                st.error(f"Failed to connect: {e}")
+        st.caption("Use the chat box to the right to ask questions and receive tool-augmented responses.")
 
-    # Chat area
     if "history" not in st.session_state:
         st.session_state.history = []
     if "logs" not in st.session_state:
         st.session_state.logs = []
 
-    query = st.text_input("Your message", key="chat_input")
-    if st.button("Send") and query:
+    desired_model = st.session_state.get("desired_model") or default_model
+    if desired_model:
+        st.session_state.desired_model = desired_model
+
+    client = get_client()
+
+    st.subheader("💬 Conversation")
+
+    prompt = st.chat_input("Type your message...")
+    if prompt:
         with st.spinner("Processing..."):
             import contextlib
 
@@ -227,7 +234,7 @@ def main():
             err_logs = ""
             try:
                 with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
-                    response, console_logs = process_query(client, query)
+                    response, console_logs = process_query(client, prompt)
             except Exception as e:
                 response = f"(exception) {type(e).__name__}: {e}"
                 console_logs = ""
@@ -235,57 +242,46 @@ def main():
                 out_logs = stdout_buf.getvalue()
                 err_logs = stderr_buf.getvalue()
 
-        # Capture debug logs separately from the model response.
         console_logs = strip_ansi_codes(console_logs or "").strip()
         out_logs = strip_ansi_codes(out_logs or "").strip()
         err_logs = strip_ansi_codes(err_logs or "").strip()
 
-        st.session_state.history.append((query, response))
+        st.session_state.history.extend([("user", prompt), ("assistant", response)])
         st.session_state.logs.append({
-            "query": query,
+            "query": prompt,
             "console": console_logs,
             "stdout": out_logs,
             "stderr": err_logs,
         })
-        # `st.experimental_rerun()` may be unavailable in some Streamlit versions.
-        # Clear the input field instead and let Streamlit rerun naturally on next interaction.
-        try:
-            rerun = getattr(st, "experimental_rerun")
-        except Exception:
-            rerun = None
 
-        if callable(rerun):
-            rerun()
+    for role, content in st.session_state.history:
+        if role == "user":
+            with st.chat_message("user"):
+                st.write(content)
         else:
-            # No safe rerun available for this Streamlit version; do nothing.
-            # Leaving the input value as-is avoids Streamlit session_state assignment errors.
-            pass
-
-    # Display chat history
-    for q, a in reversed(st.session_state.history):
-        st.markdown(f"**You:** {q}")
-        st.markdown(f"**Assistant:**\n\n{a}")
+            with st.chat_message("assistant"):
+                st.write(content)
 
     # Display logs in a separate panel for debug visibility
-    with st.expander("Model and transport logs", expanded=True):
-        st.markdown(f"**Captured log entries:** {len(st.session_state.logs)}")
-        if st.session_state.logs:
-            for entry in reversed(st.session_state.logs):
-                st.markdown(f"**Query:** {entry['query']}")
-                if entry["console"]:
-                    st.markdown("**Console:**")
-                    st.text(entry["console"])
-                if entry["stdout"]:
-                    st.markdown("**STDOUT:**")
-                    st.text(entry["stdout"])
-                if entry["stderr"]:
-                    st.markdown("**STDERR:**")
-                    st.text(entry["stderr"])
-                if not (entry["console"] or entry["stdout"] or entry["stderr"]):
-                    st.text("No debug logs captured for this query.")
-                st.markdown("---")
-        else:
-            st.write("No debug logs captured yet.")
+    # with st.expander("Model and transport logs", expanded=True):
+    #     st.markdown(f"**Captured log entries:** {len(st.session_state.logs)}")
+    #     if st.session_state.logs:
+    #         for entry in reversed(st.session_state.logs):
+    #             st.markdown(f"**Query:** {entry['query']}")
+    #             if entry["console"]:
+    #                 st.markdown("**Console:**")
+    #                 st.text(entry["console"])
+    #             if entry["stdout"]:
+    #                 st.markdown("**STDOUT:**")
+    #                 st.text(entry["stdout"])
+    #             if entry["stderr"]:
+    #                 st.markdown("**STDERR:**")
+    #                 st.text(entry["stderr"])
+    #             if not (entry["console"] or entry["stdout"] or entry["stderr"]):
+    #                 st.text("No debug logs captured for this query.")
+    #             st.markdown("---")
+    #     else:
+    #         st.write("No debug logs captured yet.")
 
 if __name__ == "__main__":
     main()
