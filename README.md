@@ -33,10 +33,18 @@ python -m streamlit run streamlit_app.py
 # to add device-ip as name 
 fill the devices.json
 
-# to use the MCP server with Claude-Code paste the following JSON in config.json of claude-desktop/settings/devloper tools
-"mcpServers": {
-     "bacnet": {
-      "command": "bacnet-mcp",
-      "args": ["--host", "127.0.0.1", "--port", "47808", "--address", "10.116.43.34/24"]
+# to use the MCP server with Claude-Code paste the following JSON in config.json of claude-desktop/settings/devloper tools and then install these packages
+pip install uv
+uv tool install mcp-proxy
+
+{  "mcpServers": {
+   "bacnet": {
+      "command": "mcp-proxy",
+      "args": [
+        "http://127.0.0.1:47808/mcp",
+        "--transport=streamablehttp"
+      ]
     }
   },
+  "preferences": .......................
+}
